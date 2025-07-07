@@ -10,7 +10,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler 
 
-from llm_integrations import LLMIntegration, HyperbolicLLM # <--- ИМПОРТ HyperbolicLLM
+from llm_integrations import LLMIntegration, HyperbolicLLM 
+from search_tool import ALL_TOOLS
 import database
 
 logger = logging.getLogger(__name__)
