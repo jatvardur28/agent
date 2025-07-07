@@ -1,7 +1,3 @@
-
-#### 5. `orchestrator.py` (Значительные изменения в логике обработки Агентов 3, 4 и 5)
-
-```python
 # ~/ai_agent_system/orchestrator.py
 import json
 import logging
