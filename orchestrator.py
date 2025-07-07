@@ -8,6 +8,7 @@ from typing import Dict, Any, List
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.callbacks import BaseCallbackHandler # <--- ДОБАВИТЬ ЭТОТ ИМПОРТ
 
 from llm_integrations import LLMIntegration
 from search_tool import ALL_TOOLS # Список инструментов (только web_search)
@@ -17,14 +18,17 @@ logger = logging.getLogger(__name__)
 
 llm_integration = LLMIntegration()
 
-class TelegramCallbackHandler:
+class TelegramCallbackHandler(BaseCallbackHandler): # <--- ИЗМЕНИТЬ ЗДЕСЬ: ДОБАВИТЬ НАСЛЕДОВАНИЕ
     """
     Коллбэк-обработчик для LangChain, который отправляет информацию о действиях агента в Telegram.
     """
     def __init__(self, chat_id: int, send_message_callback):
         self.chat_id = chat_id
         self.send_message_callback = send_message_callback
+        # Важно вызвать __init__ родительского класса, чтобы он инициализировал свои внутренние состояния
+        super().__init__() 
 
+    # Остальные методы (on_agent_action, on_tool_start, on_tool_end, on_agent_finish) остаются без изменений
     async def on_agent_action(self, action: Any, **kwargs: Any) -> Any:
         await self.send_message_callback(self.chat_id, f"➡️ _{action.log}_", parse_mode='Markdown')
 
@@ -49,23 +53,17 @@ async def create_agent_from_config(agent_id: str, telegram_callback_handler: Tel
         logger.error(f"Agent configuration for '{agent_id}' not found.")
         return None
 
-    # Создаем LLM на основе конфигурации.
-    # Для Агента #5 (движок для поиска) мы привязываем инструменты (web_search) к его LLM.
     llm = llm_integration.get_llm(
         provider=config['llm_provider'],
         model_name=config['llm_model'],
         agent_id=config['id'] if config['llm_provider'] == 'hyperbolic' else None,
-        bind_tools=(agent_id == "agent5_openrouter0") # Привязываем инструменты только к LLM Агента #5
+        bind_tools=(agent_id == "agent5_openrouter0")
     )
 
-    # CustomLLMChainWrapper для всех LLM, которые не являются LangChain AgentExecutor
-    # (Агенты 1, 2, 3, 4, 6, и Агент 5)
     class CustomLLMChainWrapper:
         def __init__(self, llm_instance, system_prompt):
             self.llm_instance = llm_instance
             self.system_prompt = system_prompt
-            # Если llm_instance это ChatOpenAI с привязанными инструментами (Agent #5),
-            # то он будет обрабатывать tool_calls.
 
         async def ainvoke(self, input_data: Dict[str, Any], chat_history: List = None):
             user_message = input_data.get('input', '')
@@ -75,16 +73,12 @@ async def create_agent_from_config(agent_id: str, telegram_callback_handler: Tel
                 messages.extend(chat_history)
             messages.append(HumanMessage(content=user_message))
 
-            # Если llm_instance это наш кастомный HyperbolicLLM
-            if hasattr(self.llm_instance, 'generate'):
-                # HyperbolicLLM ожидает формат dict for messages
+            if hasattr(self.llm_instance, 'generate'): # Для HyperbolicLLM
                 formatted_messages = [{"role": m.type, "content": m.content} for m in messages]
                 response_content = await self.llm_instance.generate(formatted_messages)
                 return {"output": response_content}
-            # Если llm_instance это LangChain ChatOpenAI LLM (включая тот, что с bind_tools)
-            else:
+            else: # Для LangChain ChatOpenAI LLM (включая тот, что с bind_tools)
                 response = await self.llm_instance.ainvoke(messages)
-                # Если LLM с bound_tools (Агент 5) генерирует ToolCalls, они будут в response.tool_calls
                 return {"output": response.content, "tool_calls": response.tool_calls if hasattr(response, 'tool_calls') else None}
 
     return CustomLLMChainWrapper(llm, config['system_prompt'])
@@ -159,17 +153,6 @@ async def run_full_agent_process(user_query: str, chat_id: int, send_message_cal
         return
 
     # --- Подготовка Агента №5 (Поисковый движок LLM) ---
-    # Агент #5 - это LLM, который сам умеет использовать tool-calling (web_search)
-    agent5_grok = await create_agent_from_config("agent5_openrouter0", telegram_callback_handler)
-    
-    # Чтобы использовать вторую модель поиска (Gemini-2.5-flash),
-    # нам нужно явно создать второй LLM для него.
-    # Если Agent #5 по ТЗ должен быть один, но с двумя опциями,
-    # то это усложняет логику выбора.
-    # Для простоты пока Агент #5 использует только Grok-3-mini.
-    # Если нужно использовать Gemini-2.5-flash как альтернативу,
-    # можно добавить выбор здесь или создать Agent #5a и Agent #5b.
-
     # Создаем временный AgentExecutor для выполнения Tool Calling через LLM Агента #5
     # (поскольку CustomLLMChainWrapper для LLM с tools просто возвращает ToolCalls, а не выполняет их)
     # Это обертка, чтобы LLM Агента 5 мог реально вызвать web_search через LangChain.
@@ -230,10 +213,8 @@ async def run_full_agent_process(user_query: str, chat_id: int, send_message_cal
 
         while current_attempt <= max_search_attempts:
             input_message = task_config['instructional_query']
-            if current_attempt > 0 and chat_history_for_agent: # Если это не первая итерация и есть история
-                # Если у нас есть результат предыдущего поиска, добавляем его к промпту
-                pass # История уже в chat_history_for_agent
-
+            # Если это не первая итерация и есть история для агента, она уже содержит результаты предыдущего поиска
+            
             try:
                 # LLM (Hyperbolic) генерирует ответ, возможно с запросом на поиск
                 agent_response_obj = await agent_instance.ainvoke({"input": input_message}, chat_history=chat_history_for_agent)
@@ -253,8 +234,8 @@ async def run_full_agent_process(user_query: str, chat_id: int, send_message_cal
                     # Выполняем поиск через Агента #5 (который является AgentExecutor)
                     search_result = await perform_web_search(search_query, search_executor)
                     
-                    # Добавляем результат поиска в историю как ToolMessage
-                    chat_history_for_agent.append(ToolMessage(content=search_result, tool_call_id="search_tool_call")) # tool_call_id может быть любым, если мы не отслеживаем конкретный вызов
+                    # Добавляем результат поиска в историю как ToolMessage, чтобы агент мог его использовать
+                    chat_history_for_agent.append(ToolMessage(content=search_result, tool_call_id="search_tool_call")) 
                     
                     await send_message_callback(chat_id, f"✅ Поиск для {agent_label} завершен. Возвращаю результаты агенту.", parse_mode='Markdown')
                     current_attempt += 1
