@@ -92,7 +92,7 @@ class LLMIntegration:
             if not self.nousresearch_api_key:
                 raise ValueError("NousResearch API key is not set.")
             
-            nous_base_url = "https://api.nousresearch.com/v1" 
+            nous_base_url = "https://inference-api.nousresearch.com/v1" 
             logger.info(f"Initializing NousResearch LLM with model: {model_name} and base_url: {nous_base_url}")
             return ChatOpenAI(
                 model=model_name,
